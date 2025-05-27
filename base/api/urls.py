@@ -1,7 +1,6 @@
 from django.urls import path
-from .views import UploadFileView, PredictCreditView
+from .views import UploadExcelFileView
 
 urlpatterns = [
-    path('upload/', UploadFileView.as_view(), name='upload'),
-    path('predict/', PredictCreditView.as_view(), name='predict'),
+    path('upload/', UploadExcelFileView.as_view(), name='upload-excel'),
 ]
