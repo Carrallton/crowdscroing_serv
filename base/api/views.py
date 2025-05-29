@@ -2,10 +2,21 @@ import pandas as pd
 from rest_framework.views import APIView
 from rest_framework.parsers import MultiPartParser
 from rest_framework.response import Response
-from .models import Company
+from .models import Company, FinancialReport
+from .serializers import CompanySerializer
 import logging
 
 logger = logging.getLogger(__name__)
+
+
+class CompanyDetailView(APIView):
+    def get(self, request, inn):
+        try:
+            company = Company.objects.get(inn=inn)
+            serializer = CompanySerializer(company)
+            return Response(serializer.data)
+        except Company.DoesNotExist:
+            return Response({"error": "Компания не найдена"}, status=404)
 
 class UploadExcelFileView(APIView):
     parser_classes = [MultiPartParser]
@@ -13,6 +24,7 @@ class UploadExcelFileView(APIView):
     def post(self, request):
         file = request.FILES.get('file')
         inn = request.data.get('inn')
+        year = request.data.get('year')  # Новый параметр: год отчета
 
         if not file:
             return Response({"error": "Файл не выбран"}, status=400)
@@ -20,8 +32,10 @@ class UploadExcelFileView(APIView):
         if not inn or len(inn) != 10:
             return Response({"error": "Введите корректный ИНН (10 цифр)"}, status=400)
 
+        if not year or not year.isdigit():
+            return Response({"error": "Укажите год отчета"}, status=400)
+
         try:
-            # Чтение Excel
             df_income = pd.read_excel(file, sheet_name='Отчет о фин. результатах', header=None)
             df_balance = pd.read_excel(file, sheet_name='Бухгалтерский баланс', header=None)
         except Exception as e:
@@ -29,24 +43,27 @@ class UploadExcelFileView(APIView):
             return Response({"error": f"Ошибка при чтении файла: {str(e)}"}, status=400)
 
         def get_value_by_code(df, code):
-            try:
-                row = df[df[1].astype(str).str.strip() == str(code).strip()]
-                if not row.empty:
-                    value = row.iloc[0][2]
+            for index, row in df.iterrows():
+                if str(row[1]).strip() == str(code).strip():
+                    value = row[2]
                     if isinstance(value, str):
                         value = value.replace(" ", "").replace(",", ".")
-                    if value is not None and str(value).replace('.', '', 1).isdigit():
+                    try:
                         return float(value)
-                    else:
+                    except:
                         logger.warning(f"Значение для кода {code} не является числом: {value}")
-                else:
-                    logger.warning(f"Не найдено значение для кода {code}")
-            except Exception as e:
-                logger.error(f"Ошибка при обработке кода {code}: {e}")
+                        return 0
+            logger.warning(f"Не найдено значение для кода {code}")
             return 0
 
-        company_data = {
-            'inn': inn,
+        company, created = Company.objects.update_or_create(
+            inn=inn,
+            defaults={'name': f'Компания {inn}'}
+        )
+
+        report_data = {
+            'company': company,
+            'year': int(year),
             'revenue': get_value_by_code(df_income, '2110'),
             'cost_of_sales': get_value_by_code(df_income, '2120'),
             'gross_profit': get_value_by_code(df_income, '2100'),
@@ -64,14 +81,13 @@ class UploadExcelFileView(APIView):
             'total_liabilities': get_value_by_code(df_balance, '1700'),
         }
 
-        logger.info(f"Данные для сохранения: {company_data}")
-
-        company, created = Company.objects.update_or_create(
-            inn=company_data['inn'],
-            defaults=company_data
+        report, _ = FinancialReport.objects.update_or_create(
+            company=report_data['company'],
+            year=report_data['year'],
+            defaults=report_data
         )
 
         return Response({
             "status": "success",
-            "message": f"Компания с ИНН {company.inn} добавлена/обновлена"
+            "message": f"Отчет компании {inn} за {year} год добавлен/обновлён"
         })
